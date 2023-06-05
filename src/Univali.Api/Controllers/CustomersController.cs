@@ -23,7 +23,7 @@ public class CustomersController : ControllerBase
         return Ok(customersToReturn);
     }
 
-    [HttpGet("{id}")]
+    [HttpGet("{id}", Name = "GetCustomerById")]
     public ActionResult<CustomerDto> GetCustomerById(int id)
     {
         var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(c => c.Id == id);
@@ -39,7 +39,7 @@ public class CustomersController : ControllerBase
         return Ok(customerToReturn);
     }
 
-    [HttpGet("cpf/{cpf}")]
+    [HttpGet("cpf/{cpf}", Name = "GetCustomerByCpf")]
     public ActionResult<CustomerDto> GetCustomerByCpf(string cpf)
     {
         var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(c => c.Cpf == cpf);
@@ -215,7 +215,7 @@ public class CustomersController : ControllerBase
             Addresses = customerWithAddressesForCreationDto.Addresses
                 .Select(address => new Address
                 {
-                    Id = addressId++,
+                    Id = ++addressId,
                     Street = address.Street,
                     Number = address.Number,
                     AdditionalInfo = address.AdditionalInfo,
@@ -266,10 +266,11 @@ public class CustomersController : ControllerBase
         customerFromDatabase.Cpf = customerWithAddressesForUpdateDto.Cpf;
 
         int addressId = Data.Instance.Customers.SelectMany(c => c.Addresses).Max(a => a.Id);
+
         customerFromDatabase.Addresses = customerWithAddressesForUpdateDto.Addresses
             .Select(address => new Address
             {
-                Id = addressId++,
+                Id = ++addressId,
                 Street = address.Street,
                 Number = address.Number,
                 AdditionalInfo = address.AdditionalInfo,

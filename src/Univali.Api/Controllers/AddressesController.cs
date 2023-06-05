@@ -34,7 +34,7 @@ public class AddressesController : ControllerBase
         return Ok(addresssesToReturn);
     }
 
-    [HttpGet("{addressId}")]
+    [HttpGet("{addressId}", Name = "GetAddress")]
     public ActionResult<AddressDto> GetAddress(int customerId, int addressId)
     {
         var addressFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == customerId)
