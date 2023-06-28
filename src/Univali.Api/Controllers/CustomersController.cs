@@ -1,284 +1,180 @@
+using AutoMapper;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Univali.Api.DbContexts;
 using Univali.Api.Entities;
+using Univali.Api.Features.Customers.Commands.CreateCustomer;
+using Univali.Api.Features.Customers.Commands.CreateCustomerWithAddresses;
+using Univali.Api.Features.Customers.Commands.DeleteCustomer;
+using Univali.Api.Features.Customers.Commands.UpdateCustomer;
+using Univali.Api.Features.Customers.Commands.UpdateCustomerWithAddresses;
+using Univali.Api.Features.Customers.Queries.GetCustomerDetail;
 using Univali.Api.Models;
+using Univali.Api.Repositories;
 
 namespace Univali.Api.Controllers;
 
-[ApiController]
+
 [Route("api/customers")]
-public class CustomersController : ControllerBase
+[Authorize]
+public class CustomersController : MainController
 {
-    [HttpGet]
-    public ActionResult<IEnumerable<CustomerDto>> GetCustomers()
+
+    private readonly IMapper _mapper;
+    private readonly ICustomerRepository _customerRepository;
+    private readonly IMediator _mediator;
+
+    public CustomersController(IMapper mapper, ICustomerRepository customerRepository, IMediator mediator)
     {
-        var customersToReturn = Data.Instance.Customers
-            .Select(customer => new CustomerDto
-            {
-                Id = customer.Id,
-                Name = customer.Name,
-                Cpf = customer.Cpf
-            });
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _customerRepository = customerRepository ?? throw new ArgumentNullException(nameof(customerRepository));
+        _mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<IEnumerable<CustomerDto>>> GetCustomers()
+    {
+        var customersFromDatabase = await _customerRepository.GetCustomersAsync();
+        var customersToReturn = _mapper.Map<IEnumerable<CustomerDto>>(customersFromDatabase);
         return Ok(customersToReturn);
     }
 
-    [HttpGet("{id}", Name = "GetCustomerById")]
-    public ActionResult<CustomerDto> GetCustomerById(int id)
+    [HttpGet("{customerId}", Name = "GetCustomerById")]
+    public async Task<ActionResult<CustomerDto>> GetCustomerById(
+        int customerId)
     {
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(c => c.Id == id);
+        var getCustomerDetailQuery = new GetCustomerDetailQuery{Id = customerId};
+        var customerToReturn = await  _mediator.Send(getCustomerDetailQuery);
 
-        if (customerFromDatabase == null) return NotFound();
-
-        var customerToReturn = new CustomerDto
-        {
-            Id = customerFromDatabase.Id,
-            Name = customerFromDatabase.Name,
-            Cpf = customerFromDatabase.Cpf
-        };
+        if(customerToReturn == null) return NotFound();
         return Ok(customerToReturn);
     }
 
-    [HttpGet("cpf/{cpf}", Name = "GetCustomerByCpf")]
+    [HttpGet("cpf/{cpf}")]
     public ActionResult<CustomerDto> GetCustomerByCpf(string cpf)
     {
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(c => c.Cpf == cpf);
+        var customerFromDatabase = _customerRepository.GetCustomerByCpfAsync(cpf);
 
-        if (customerFromDatabase == null) return NotFound();
-
-        var customerToReturn = new CustomerDto
+        if (customerFromDatabase == null)
         {
-            Id = customerFromDatabase.Id,
-            Name = customerFromDatabase.Name,
-            Cpf = customerFromDatabase.Cpf
-        };
+            return NotFound();
+        }
+
+        var customerToReturn = _mapper.Map<CustomerDto>(customerFromDatabase);
         return Ok(customerToReturn);
     }
 
     [HttpPost]
-    public ActionResult<CustomerDto> CreateCustomer(CustomerForCreationDto customerForCreationDto)
+    public async Task<ActionResult<CustomerDto>> CreateCustomer(
+        CreateCustomerCommand createCustomerCommand
+        )
     {
-        if (!ModelState.IsValid)
-        {
-            Response.ContentType = "application/problem+json";
-            // Cria a fábrica de um objeto de detalhes do problema de validação
-            var problemDetailsFactory = HttpContext.RequestServices.GetRequiredService<ProblemDetailsFactory>();
-
-            // Cria um objeto de detalhes do problema de validação
-            var validationProblemDetails = problemDetailsFactory.CreateValidationProblemDetails(HttpContext, ModelState);
-
-            // Atribui o status code 422 no corpo da response
-            validationProblemDetails.Status = StatusCodes.Status422UnprocessableEntity;
-
-            return UnprocessableEntity(validationProblemDetails);
-        }
-
-        var customerEntity = new Customer
-        {
-            Id = Data.Instance.Customers.Max(c => c.Id) + 1,
-            Name = customerForCreationDto.Name,
-            Cpf = customerForCreationDto.Cpf
-        };
-
-        Data.Instance.Customers.Add(customerEntity);
-
-        var customerToReturn = new CustomerDto
-        {
-            Id = customerEntity.Id,
-            Name = customerForCreationDto.Name,
-            Cpf = customerForCreationDto.Cpf
-        };
+        var customerToReturn = await _mediator.Send(createCustomerCommand);
 
         return CreatedAtRoute
         (
             "GetCustomerById",
-            new { id = customerToReturn.Id },
+            new { customerId = customerToReturn.Id },
             customerToReturn
         );
     }
 
     [HttpPut("{id}")]
-    public ActionResult UpdateCustomer(int id, CustomerForUpdateDto customerForUpdateDto)
+    public async Task<ActionResult> UpdateCustomer(int id,
+        UpdateCustomerCommand customerForUpdateDto
+        )
     {
         if (id != customerForUpdateDto.Id) return BadRequest();
+        
+        var customerUpdate = await  _mediator.Send(customerForUpdateDto);
 
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == id);
-
-        if (customerFromDatabase == null) return NotFound();
-
-        customerFromDatabase.Name = customerForUpdateDto.Name;
-        customerFromDatabase.Cpf = customerForUpdateDto.Cpf;
+        if(customerUpdate.sucess == false) return NotFound();
 
         return NoContent();
     }
 
     [HttpDelete("{id}")]
-    public ActionResult DeleteCustomer(int id)
+    public async Task<ActionResult> DeleteCustomer(int id)
     {
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == id);
-
-        if (customerFromDatabase == null) return NotFound();
-
-        Data.Instance.Customers.Remove(customerFromDatabase);
-
+        var DeleteCustomer = new DeleteCustomerCommand {Id = id};
+        var customerDelete = await _mediator.Send(DeleteCustomer);
+        if(customerDelete.sucess == false) return NotFound();
         return NoContent();
     }
 
     [HttpPatch("{id}")]
-    public ActionResult PartiallyUpdateCustomer(
+    public async Task<ActionResult> PartiallyUpdateCustomer(
         [FromBody] JsonPatchDocument<CustomerForPatchDto> patchDocument,
         [FromRoute] int id)
     {
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == id);
+        var customerFromDatabase = await _customerRepository.GetCustomerByIdAsync(id);
 
         if (customerFromDatabase == null) return NotFound();
 
-        var customerToPatch = new CustomerForPatchDto
+        var customerToPatch = _mapper.Map<CustomerForPatchDto>(customerFromDatabase);
+
+        patchDocument.ApplyTo(customerToPatch, ModelState);
+
+        if (!TryValidateModel(customerToPatch))
         {
-            Name = customerFromDatabase.Name,
-            Cpf = customerFromDatabase.Cpf
-        };
+            return ValidationProblem(ModelState);
+        }
 
-        patchDocument.ApplyTo(customerToPatch);
+        _mapper.Map(customerToPatch, customerFromDatabase);
 
-        customerFromDatabase.Name = customerToPatch.Name;
-        customerFromDatabase.Cpf = customerToPatch.Cpf;
+        await _customerRepository.SaveChangesAsync();
 
         return NoContent();
+
     }
 
-    [HttpGet("with-address")]
-    public ActionResult<IEnumerable<CustomerWithAddressesDto>> GetCustomersWithAddresses()
+    [HttpGet("with-addresses")]
+    public async Task<ActionResult<IEnumerable<CustomerWithAddressesDto>>> GetCustomersWithAddresses()
     {
-        var customersFromDatabase = Data.Instance.Customers;
-
-        var customersToReturn = customersFromDatabase
-            .Select(customer => new CustomerWithAddressesDto
-            {
-                Id = customer.Id,
-                Name = customer.Name,
-                Cpf = customer.Cpf,
-                Addresses = customer.Addresses
-                    .Select(address => new AddressDto
-                    {
-                        Id = address.Id,
-                        Street = address.Street,
-                        Number = address.Number,
-                        AdditionalInfo = address.AdditionalInfo,
-                        Neighborhood = address.Neighborhood,
-                        City = address.City,
-                        Zip = address.Zip
-                    }).ToList()
-            });
-
+        var customersFromDatabase = await _customerRepository.GetCustomersWithAddressesAsync();
+        var customersToReturn =  _mapper.Map<IEnumerable<CustomerWithAddressesDto>>(customersFromDatabase);
         return Ok(customersToReturn);
     }
 
-    [HttpGet("with-address/{id}")]
-    public ActionResult<IEnumerable<CustomerWithAddressesDto>> GetCustomerWithAddresses(int id)
+    [HttpGet("with-addresses/{customerId}", Name = "GetCustomerWithAddressesById")]
+    public  async Task<ActionResult<CustomerWithAddressesDto>> GetCustomerWithAddressesById(int customerId)
     {
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(c => c.Id == id);
-
+        var customerFromDatabase = await _customerRepository.GetCustomerWithAddressesByIdAsync(customerId);
         if (customerFromDatabase == null) return NotFound();
-
-        var customerToReturn = new CustomerWithAddressesDto
-        {
-            Id = customerFromDatabase.Id,
-            Name = customerFromDatabase.Name,
-            Cpf = customerFromDatabase.Cpf,
-            Addresses = customerFromDatabase.Addresses
-                .Select(address => new AddressDto
-                {
-                    Id = address.Id,
-                    Street = address.Street,
-                    Number = address.Number,
-                    AdditionalInfo = address.AdditionalInfo,
-                    Neighborhood = address.Neighborhood,
-                    City = address.City,
-                    Zip = address.Zip
-                }).ToList()
-        };
-
+        var customerToReturn = _mapper.Map<CustomerWithAddressesDto>(customerFromDatabase);
         return Ok(customerToReturn);
     }
 
-    [HttpPost("with-address")]
-    public ActionResult<CustomerWithAddressesDto> CreateCustomerWithAddress(CustomerWithAddressesForCreationDto customerWithAddressesForCreationDto)
+    [HttpPost("with-addresses")]
+    public async Task<ActionResult<CustomerWithAddressesDto>> CreateCustomerWithAddresses(
+       CreateCustomerWithAddressesCommand customerWithAddressesForCreationDto)
     {
-        int addressId = Data.Instance.Customers.SelectMany(c => c.Addresses).Max(a => a.Id);
-
-        var customerEntity = new Customer
-        {
-            Id = Data.Instance.Customers.Max(c => c.Id) + 1,
-            Name = customerWithAddressesForCreationDto.Name,
-            Cpf = customerWithAddressesForCreationDto.Cpf,
-            Addresses = customerWithAddressesForCreationDto.Addresses
-                .Select(address => new Address
-                {
-                    Id = ++addressId,
-                    Street = address.Street,
-                    Number = address.Number,
-                    AdditionalInfo = address.AdditionalInfo,
-                    Neighborhood = address.Neighborhood,
-                    City = address.City,
-                    Zip = address.Zip
-                }).ToList()
-        };
-
-        Data.Instance.Customers.Add(customerEntity);
-
-        var customerToReturn = new CustomerWithAddressesDto
-        {
-            Id = customerEntity.Id,
-            Name = customerWithAddressesForCreationDto.Name,
-            Cpf = customerWithAddressesForCreationDto.Cpf,
-            Addresses = customerEntity.Addresses
-                .Select(address => new AddressDto
-                {
-                    Id = address.Id,
-                    Street = address.Street,
-                    Number = address.Number,
-                    AdditionalInfo = address.AdditionalInfo,
-                    Neighborhood = address.Neighborhood,
-                    City = address.City,
-                    Zip = address.Zip
-                }).ToList()
-        };
+      
+        var customerToReturn = await _mediator.Send(customerWithAddressesForCreationDto);
 
         return CreatedAtRoute
         (
-            "GetCustomerById",
-            new { id = customerToReturn.Id },
+            "GetCustomerWithAddressesById",
+            new { customerId = customerToReturn.Id },
             customerToReturn
         );
     }
 
-    [HttpPut("with-address/{id}")]
-    public ActionResult UpdateCustomerWithAddresses(int id, CustomerWithAddressesForUpdateDto customerWithAddressesForUpdateDto)
+    [HttpPut("with-addresses/{customerId}")]
+    public async Task<ActionResult> UpdateCustomerWithAddresses(int customerId,
+       UpdateCustomerWithAddressesCommand customerWithAddressesForUpdateDto)
     {
-        if (id != customerWithAddressesForUpdateDto.Id) return BadRequest();
+        if (customerId != customerWithAddressesForUpdateDto.Id) return BadRequest();
 
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == id);
-
-        if (customerFromDatabase == null) return NotFound();
-
-        customerFromDatabase.Name = customerWithAddressesForUpdateDto.Name;
-        customerFromDatabase.Cpf = customerWithAddressesForUpdateDto.Cpf;
-
-        int addressId = Data.Instance.Customers.SelectMany(c => c.Addresses).Max(a => a.Id);
-
-        customerFromDatabase.Addresses = customerWithAddressesForUpdateDto.Addresses
-            .Select(address => new Address
-            {
-                Id = ++addressId,
-                Street = address.Street,
-                Number = address.Number,
-                AdditionalInfo = address.AdditionalInfo,
-                Neighborhood = address.Neighborhood,
-                City = address.City,
-                Zip = address.Zip
-            }).ToList();
-
+        var updateCustomer = await _mediator.Send(customerWithAddressesForUpdateDto);
+        if(updateCustomer.sucess == false) return NotFound();
         return NoContent();
     }
+
 }

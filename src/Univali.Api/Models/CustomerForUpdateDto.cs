@@ -1,10 +1,10 @@
-using Univali.Api.Entities;
+using System.ComponentModel.DataAnnotations;
 
 namespace Univali.Api.Models;
 
-public class CustomerForUpdateDto
+public class CustomerForUpdateDto : CustomerForManipulationDto
 {
+    [Required(ErrorMessage = "You should fill out an Id")]
     public int Id {get; set;}
-    public string Name {get; set;} = string.Empty;
-    public string Cpf {get; set;} = string.Empty;
+
 }

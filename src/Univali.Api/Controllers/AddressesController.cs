@@ -1,97 +1,122 @@
+using AutoMapper;
+using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Univali.Api.DbContexts;
 using Univali.Api.Entities;
 using Univali.Api.Models;
 
 namespace Univali.Api.Controllers;
 
-[ApiController]
 [Route("api/customers/{customerId}/addresses")]
-public class AddressesController : ControllerBase
+public class AddressesController : MainController
 {
+    private readonly Data _data;
+    private readonly IMapper _mapper;
+    private readonly CustomerContext _context;
+
+    public AddressesController(Data data, IMapper mapper, CustomerContext context)
+    {
+        _data = data ?? throw new ArgumentNullException(nameof(data));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+    }
+
     [HttpGet]
     public ActionResult<IEnumerable<AddressDto>> GetAddresses(int customerId)
     {
-        var customerFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == customerId);
-
+        var customerFromDatabase = _context.Customers
+            .Include(c => c.Addresses)
+            .FirstOrDefault(customer => customer.Id == customerId);
         if (customerFromDatabase == null) return NotFound();
 
-        var addresssesToReturn = new List<AddressDto>();
+        var addressesToReturn = new List<AddressDto>();
 
         foreach (var address in customerFromDatabase.Addresses)
         {
-            addresssesToReturn.Add(new AddressDto
-            {
-                Id = address.Id,
-                Street = address.Street,
-                Number = address.Number,
-                AdditionalInfo = address.AdditionalInfo,
-                Neighborhood = address.Neighborhood,
-                City = address.City,
-                Zip = address.Zip
-            });
+            addressesToReturn.Add(
+                _mapper.Map<AddressDto>(address)
+            );
         }
-
-        return Ok(addresssesToReturn);
+        return Ok(addressesToReturn);
     }
 
     [HttpGet("{addressId}", Name = "GetAddress")]
     public ActionResult<AddressDto> GetAddress(int customerId, int addressId)
     {
-        var addressFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == customerId)
-            ?.Addresses.FirstOrDefault(address => address.Id == addressId);
+        // Obtém o primeiro Customer que encontrar com a id correspondente ou retorna null
+        var customerFromDatabase = _context.Customers
+            .Include(c => c.Addresses)
+            .FirstOrDefault(customer => customer.Id == customerId);
 
+        // Verifica se Customer foi encontrado
+        if (customerFromDatabase == null) return NotFound();
+
+        // Obtém o primeiro Address que encontrar com a id correspondente ou retorna null
+        var addressFromDatabase = customerFromDatabase.Addresses
+            .FirstOrDefault(address => address.Id == addressId);
+
+        // Verifica se Address foi encontrado
         if (addressFromDatabase == null) return NotFound();
 
-        var addressToReturn = new AddressDto
-        {
-            Id = addressFromDatabase.Id,
-            Street = addressFromDatabase.Street,
-            Number = addressFromDatabase.Number,
-            AdditionalInfo = addressFromDatabase.AdditionalInfo,
-            Neighborhood = addressFromDatabase.Neighborhood,
-            City = addressFromDatabase.City,
-            Zip = addressFromDatabase.Zip
-        };
+        var addressToReturn = _mapper.Map<AddressDto>(addressFromDatabase);
+
+        // Retorna StatusCode 200 com os Addresses no corpo do response
         return Ok(addressToReturn);
     }
 
+    ///<summary>Creates Address for customer</summary>
+    ///<param name="customerId"> Id do customer </param>
+    ///<param name="addressForCreationDto"> Dto do endereco </param>
+    ///
     [HttpPost]
-    public ActionResult<AddressDto> CreateAddress(int customerId, AddressForCreationDto addressForCreationDto)
+    public ActionResult<AddressDto> CreateAddress(
+       int customerId,
+       AddressForCreationDto addressForCreationDto)
     {
-        var customerForAddressCreation = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == customerId);
+        // Obtém o Customer ou retorna null
+        var customerFromDatabase = _context.Customers
+            .FirstOrDefault(c => c.Id == customerId);
 
-        if (customerForAddressCreation == null) return NotFound();
+        // Verifica se Customer existe
+        if (customerFromDatabase == null) return NotFound();
 
-        var addressEntity = new Address
-        {
-            Id = Data.Instance.Customers.SelectMany(c => c.Addresses).Max(a => a.Id) + 1,
-            Street = addressForCreationDto.Street,
-            Number = addressForCreationDto.Number,
-            AdditionalInfo = addressForCreationDto.AdditionalInfo,
-            Neighborhood = addressForCreationDto.Neighborhood,
-            City = addressForCreationDto.City,
-            Zip = addressForCreationDto.Zip
-        };
+        /*
+            Obtém o último Id de Address
+            SelectMany retorna uma lista com todos endereços de todos usuários
+            Max obtém a Id com o valor mais alto
+        */
 
-        customerForAddressCreation.Addresses.Add(addressEntity);
+        // var addresses = _data.Customers
+        //     .SelectMany(c => c.Addresses);
 
-        var addressToReturn = new AddressDto
-        {
-            Id = addressEntity.Id,
-            Street = addressEntity.Street,
-            Number = addressEntity.Number,
-            AdditionalInfo = addressEntity.AdditionalInfo,
-            Neighborhood = addressEntity.Neighborhood,
-            City = addressEntity.City,
-            Zip = addressEntity.Zip
-        };
+        // foreach(var address in addresses)
+        // {
+        //     Console.WriteLine($"Street: {address.Street}");
+        //     Console.WriteLine($"City: {address.City}");
+        // }
 
-        return CreatedAtRoute
-        (
-            "GetAddress",
+        // Mapeia a instância AddressForCreationDto para Address
+        var addressEntity = _mapper.Map<Address>(addressForCreationDto);
+
+
+        // Inseri no Singleton
+        customerFromDatabase.Addresses.Add(addressEntity);
+
+        _context.SaveChanges();
+
+        // Mapeia a Instância Address do Singleton para uma instância AddressDto
+        var addressToReturn = _mapper.Map<AddressDto>(addressEntity);
+
+
+        // Retorna um status code 201 com o local onde o recurso possa ser obtido
+        return CreatedAtRoute("GetAddress",
             new
             {
-                customerId = customerForAddressCreation.Id,
+                customerId = customerFromDatabase.Id,
                 addressId = addressToReturn.Id
             },
             addressToReturn
@@ -99,36 +124,55 @@ public class AddressesController : ControllerBase
     }
 
     [HttpPut("{addressId}")]
-    public ActionResult UpdateAddress(int customerId, int addressId, AddressForUpdateDto addressForUpdateDto)
+    public ActionResult UpdateAddress(int customerId, int addressId,
+       AddressForUpdateDto addressForUpdateDto)
     {
-        if (addressId != addressForUpdateDto.Id) return BadRequest();
+        if (addressForUpdateDto.Id != addressId) return BadRequest();
 
-        var addressFromDatabase = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == customerId)
-            ?.Addresses.FirstOrDefault(address => address.Id == addressId);
+        // Obtém o primeiro Customer que encontrar com a id correspondente ou retorna null
+        var customerFromDatabase = _context.Customers
+             .Include(c => c.Addresses)
+            .FirstOrDefault(c => c.Id == customerId);
 
+        // Verifica se Customer foi encontrado
+        if (customerFromDatabase == null) return NotFound();
+
+        // Obtém o primeiro Address que encontrar com a id correspondente ou retorna null
+        var addressFromDatabase = customerFromDatabase.Addresses
+            .FirstOrDefault(a => a.Id == addressId);
+
+        // Verifica se Address foi encontrado
         if (addressFromDatabase == null) return NotFound();
 
-        addressFromDatabase.Street = addressForUpdateDto.Street;
-        addressFromDatabase.Number = addressForUpdateDto.Number;
-        addressFromDatabase.AdditionalInfo = addressForUpdateDto.AdditionalInfo;
-        addressFromDatabase.Neighborhood = addressForUpdateDto.Neighborhood;
-        addressFromDatabase.City = addressForUpdateDto.City;
-        addressFromDatabase.Zip = addressForUpdateDto.Zip;
+        // Atualiza Address no Database
+        _mapper.Map(addressForUpdateDto, addressFromDatabase);
 
+        _context.SaveChanges();
+
+        // Retorna Status Code 204 No Content
         return NoContent();
     }
 
     [HttpDelete("{addressId}")]
     public ActionResult DeleteAddress(int customerId, int addressId)
     {
-        var customerForAddressDelete = Data.Instance.Customers.FirstOrDefault(customer => customer.Id == customerId);
-        if (customerForAddressDelete == null) return NotFound();
+        var customerFromDatabase = _context.Customers
+             .Include(c => c.Addresses)
+            .FirstOrDefault(customer => customer.Id == customerId);
 
-        var addressFromDatabase = customerForAddressDelete.Addresses.FirstOrDefault(address => address.Id == addressId);
+        if (customerFromDatabase == null) return NotFound();
+
+        var addressFromDatabase = customerFromDatabase.Addresses
+            .FirstOrDefault(address => address.Id == addressId);
+
         if (addressFromDatabase == null) return NotFound();
 
-        customerForAddressDelete.Addresses.Remove(addressFromDatabase);
+        customerFromDatabase.Addresses.Remove(addressFromDatabase);
+
+        _context.SaveChanges();
 
         return NoContent();
     }
+
+
 }
